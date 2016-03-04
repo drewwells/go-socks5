@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"time"
 )
 
 func proxyServe() (*net.TCPAddr, error) {
@@ -13,7 +14,6 @@ func proxyServe() (*net.TCPAddr, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("starting server on", l.Addr())
 	go func() {
 		err := http.Serve(l, &service{})
 		if err != nil {
@@ -21,6 +21,9 @@ func proxyServe() (*net.TCPAddr, error) {
 		}
 		log.Fatal("serving yo!")
 	}()
+	// reply is sent before server is started, ensure server is
+	// actually running before sending response
+	time.Sleep(50 * time.Millisecond)
 	addr := l.Addr().(*net.TCPAddr)
 	return addr, err
 }
