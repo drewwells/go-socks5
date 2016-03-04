@@ -43,6 +43,9 @@ type AddrSpec struct {
 	FQDN string
 	IP   net.IP
 	Port int
+	// Unix
+	Name string
+	Net  string
 }
 
 func (a *AddrSpec) String() string {
@@ -140,6 +143,20 @@ func (s *Server) handleRequest(req *Request, conn conn) error {
 	}
 }
 
+func AddrSpecFromConn(addr net.Conn) AddrSpec {
+	switch v := addr.(type) {
+	case *net.TCPConn:
+		// read the local for TCP
+		local := v.LocalAddr().(*net.TCPAddr)
+		return AddrSpec{IP: local.IP, Port: local.Port}
+	case *net.UnixConn:
+		remote := v.RemoteAddr().(*net.UnixAddr)
+		return AddrSpec{Name: remote.Name, Net: remote.Net}
+	default:
+		panic(fmt.Errorf("unsupported conn: % #v", addr))
+	}
+}
+
 // handleConnect is used to handle a connect command
 func (s *Server) handleConnect(conn conn, req *Request) error {
 	// Check if this is allowed
@@ -173,8 +190,7 @@ func (s *Server) handleConnect(conn conn, req *Request) error {
 	defer target.Close()
 
 	// Send success
-	local := target.LocalAddr().(*net.TCPAddr)
-	bind := AddrSpec{IP: local.IP, Port: local.Port}
+	bind := AddrSpecFromConn(target)
 	if err := sendReply(conn, successReply, &bind); err != nil {
 		return fmt.Errorf("Failed to send reply: %v", err)
 	}
