@@ -7,14 +7,47 @@ import (
 	"strings"
 )
 
+type sockscode uint8
+
 const (
-	ConnectCommand   = uint8(1)
-	BindCommand      = uint8(2)
-	AssociateCommand = uint8(3)
-	ipv4Address      = uint8(1)
-	fqdnAddress      = uint8(3)
-	ipv6Address      = uint8(4)
+	ConnectCommand   = sockscode(1)
+	BindCommand      = sockscode(2)
+	AssociateCommand = sockscode(3)
 )
+
+type addrcode uint8
+
+const (
+	ipv4Address addrcode = 1
+	fqdnAddress          = 3
+	ipv6Address          = 4
+)
+
+func (s addrcode) String() string {
+	switch s {
+
+	case ipv4Address:
+		return "ipv4"
+	case fqdnAddress:
+		return "fqdn"
+	case ipv6Address:
+		return "ipv6"
+	}
+	return "invalid"
+
+}
+
+func (s sockscode) String() string {
+	switch s {
+	case ConnectCommand:
+		return "Connect"
+	case BindCommand:
+		return "Bind"
+	case AssociateCommand:
+		return "Associate"
+	}
+	return "invalid"
+}
 
 const (
 	successReply uint8 = iota
@@ -60,7 +93,7 @@ type Request struct {
 	// Protocol version
 	Version uint8
 	// Requested command
-	Command uint8
+	Command sockscode
 	// AuthContext provided during negotiation
 	AuthContext *AuthContext
 	// AddrSpec of the the network that sent the request
@@ -98,7 +131,7 @@ func NewRequest(bufConn io.Reader) (*Request, error) {
 
 	request := &Request{
 		Version:  socks5Version,
-		Command:  header[1],
+		Command:  sockscode(header[1]),
 		DestAddr: dest,
 		bufConn:  bufConn,
 	}
@@ -255,9 +288,9 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 	if _, err := r.Read(addrType); err != nil {
 		return nil, err
 	}
-
+	typ := addrcode(addrType[0])
 	// Handle on a per type basis
-	switch addrType[0] {
+	switch typ {
 	case ipv4Address:
 		addr := make([]byte, 4)
 		if _, err := io.ReadAtLeast(r, addr, len(addr)); err != nil {
@@ -300,7 +333,7 @@ func readAddrSpec(r io.Reader) (*AddrSpec, error) {
 // sendReply is used to send a reply message
 func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 	// Format the address
-	var addrType uint8
+	var addrType addrcode
 	var addrBody []byte
 	var addrPort uint16
 	switch {
@@ -309,6 +342,19 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 		addrBody = []byte{0, 0, 0, 0}
 		addrPort = 0
 
+	case addr.Net == "unix":
+		// socks5 protocol only allows ip4 or ip6 forwards
+		// so create a listener and respond with its address
+		addr, err := proxyServe()
+		if err != nil {
+			return err
+		}
+		// sendReply can parse the rest...
+		spec := &AddrSpec{
+			IP:   addr.IP,
+			Port: addr.Port,
+		}
+		return sendReply(w, resp, spec)
 	case addr.FQDN != "":
 		addrType = fqdnAddress
 		addrBody = append([]byte{byte(len(addr.FQDN))}, addr.FQDN...)
@@ -328,12 +374,13 @@ func sendReply(w io.Writer, resp uint8, addr *AddrSpec) error {
 		return fmt.Errorf("Failed to format address: %v", addr)
 	}
 
+	fmt.Println("responding with", addrBody, addrPort)
 	// Format the message
 	msg := make([]byte, 6+len(addrBody))
 	msg[0] = socks5Version
 	msg[1] = resp
 	msg[2] = 0 // Reserved
-	msg[3] = addrType
+	msg[3] = uint8(addrType)
 	copy(msg[4:], addrBody)
 	msg[4+len(addrBody)] = byte(addrPort >> 8)
 	msg[4+len(addrBody)+1] = byte(addrPort & 0xff)
